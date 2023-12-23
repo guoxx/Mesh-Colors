@@ -1,6 +1,8 @@
 #ifndef MESH_COLORS_CGINC
 #define MESH_COLORS_CGINC
 
+// UNITY_SHADER_NO_UPGRADE
+
 StructuredBuffer<uint> _MeshColors_PatchBuffer;
 StructuredBuffer<uint2> _MeshColors_MetaBuffer;
 ByteAddressBuffer _MeshColors_AdjacencyInfoBuffer;
@@ -96,15 +98,186 @@ float4 MeshColors_Sample(uint primitiveIndex, float3 bary)
     return col;
 }
 
+float2x3 MeshColors_AdjacencyTransformMatrix(uint srcEdge, uint dstEdge, bool sameWindingOrder)
+{
+    float2x3 m = 0;
+    if (srcEdge == 0)
+    {
+        if (dstEdge == 0)
+        {
+            if (sameWindingOrder)
+            {
+                m =  ((-1, 0, 1), (0, -1, 0));
+            }
+            else
+            {
+                m = ((1, 0, 0), (0, -1, 0));
+            }
+        }
+        else if (dstEdge == 1)
+        {
+            if (sameWindingOrder)
+            {
+                m = ((0, -1, 0), (1, 0, 0));
+            }
+            else
+            {
+                m = ((0, -1, 0), (-1, 0, 1));
+            }
+        }
+        else
+        {
+            if (sameWindingOrder)
+            {
+                m = ((0.5, 0.5, 0.5), (-0.5, 0.5, -0.5));
+            }
+            else
+            {
+                m = ((-0.5, 0.5, 0.5), (0.5, 0.5, -0.5));
+            }
+        }
+    }
+    else if (srcEdge == 1)
+    {
+        if (dstEdge == 0)
+        {
+            if (sameWindingOrder)
+            {
+                m = ((0, 1, 0), (0, -1, 0));
+            }
+            else
+            {
+                m = ((0, -1, 1), (0, -1, 1));
+            }
+        }
+        else if (dstEdge == 1)
+        {
+            if (sameWindingOrder)
+            {
+                m = ((-1, 0, 0), (0, -1, 1));
+            }
+            else
+            {
+                m = ((-1, 0, 0), (0, 1, 0));
+            }
+        }
+        else
+        {
+            if (sameWindingOrder)
+            {
+                m = ((0.5, -0.5, -0.5), (0.5, 0.5, 0.5));
+            }
+            else
+            {
+                m = ((0.5, 0.5, -0.5), (0.5, -0.5, 0.5));
+            }
+        }
+    }
+    else
+    {
+        if (dstEdge == 0)
+        {
+            if (sameWindingOrder)
+            {
+                m = ((1, -1, 0), (1, 1, 1));
+            }
+            else
+            {
+                m = ((-1, 1, 1), (1, 1, 0));
+            }
+        }
+        else if (dstEdge == 1)
+        {
+            if (sameWindingOrder)
+            {
+                m = ((1, 1, 1), (-1, 1, 0));
+            }
+            else
+            {
+                m = ((1, 1, 0), (-1, 1, 1));
+            }
+        }
+        else
+        {
+            if (sameWindingOrder)
+            {
+                m = ((-1, 0, 1), (0, -1, 1));
+            }
+            else
+            {
+                m = ((0, -1, 1), (-1, 0, 1));
+            }
+        }
+    }
+    return m;
+}
+
 float4 MeshColors_SampleAcrossTriangles(uint primitiveIndex, float2 origin, float2 dir, float t)
 {
-    // intersect with the nearest boundary
+    float4 color = 0;
 
-    // dist is smaller than the distance to the nearest neighbor, stop inside triangle
+    for (uint iter = 0; iter < 8; iter++)
+    {
+        // intersect with the nearest boundary
+        // 0: y = 0
+        float t0 = -origin.y / dir.y;
+        // 1: x = 0
+        float t1 = -origin.x / dir.x;
+        // 2: x + y = 1
+        float t2 = -(origin.x + origin.y) / (dir.x + dir.y);
+        
+        uint hitEdge = -1;
+        float hitT = 1e10f;
+        if (t0 > 0 && t0 < hitT)
+        {
+            hitEdge = 0;
+            hitT = t0;
+        }
+        if (t1 > 0 && t1 < hitT)
+        {
+            hitEdge = 1;
+            hitT = t1;
+        }
+        if (t2 > 0 && t2 < hitT)
+        {
+            hitEdge = 2;
+            hitT = t2;
+        }
 
-    // dist is bigger than the distance to the nearest neighbor, reduce the distance and move to the next triangle
+        if (hitEdge == -1)
+        {
+            break;
+        }
 
-    return 0.0f;
+        // dist is smaller than the distance to the nearest neighbor, stop inside triangle
+        if (t < hitT)
+        {
+            float2 target = origin + dir * t;
+            color = MeshColors_Sample(primitiveIndex, float3(target, 1 - target.x - target.y));
+            break;
+        }
+
+        // dist is bigger than the distance to the nearest neighbor, reduce the distance and move to the next triangle
+        MeshColors_AdjacencyInfo adjacencyInfo = MeshColors_LoadAdjacencyInfo(primitiveIndex);
+
+        uint nextPrimitiveIndex = adjacencyInfo.TriangleIndices[hitEdge];
+        uint nextPrimitiveEdge = adjacencyInfo.LocalEdgeIndices[hitEdge];
+        if (nextPrimitiveIndex == 0xffffffff || nextPrimitiveEdge == 0xffffffff)
+        {
+            break;
+        }
+
+        // TODO: check winding order
+        bool sameWindingOrder = true;
+        float2x3 transformMatrix = MeshColors_AdjacencyTransformMatrix(hitEdge, nextPrimitiveEdge, sameWindingOrder);
+
+        origin = mul(transformMatrix, float3(origin + dir * hitT, 1)).xy;
+        dir = mul(transformMatrix, float3(dir, 0)).xy;
+        t -= hitT;
+        primitiveIndex = nextPrimitiveIndex;
+    }
+
+    return color;
 }
 
 #endif // MESH_COLORS_CGINC
