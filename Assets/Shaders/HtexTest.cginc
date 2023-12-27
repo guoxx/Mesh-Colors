@@ -187,6 +187,79 @@ float4 Htexture(int halfedgeID, float2 uv, int channel)
     return c / alpha;
 }
 
+float4 HtextureSpatialSample(int currentHalfedgeID, float2 uv, float2 dir, float t)
+{
+    float4 color = 0;
+
+    for (uint iter = 0; iter < 8; ++iter)
+    {
+        float t_prev = -uv.y / dir.y;
+        float t_next = -uv.x / dir.x;
+        float t_twin = (1 - uv.x - uv.y) / (dir.x + dir.y);
+
+        int hitEdge = -1;
+        float hitT = 1e10;
+        if (t_prev > 0 && t_prev < hitT)
+        {
+            hitEdge = 0;
+            hitT = t_prev;
+        }
+        if (t_next > 0 && t_next < hitT)
+        {
+            hitEdge = 1;
+            hitT = t_next;
+        }
+        if (t_twin > 0 && t_twin < hitT)
+        {
+            hitEdge = 2;
+            hitT = t_twin;
+        }
+
+        if (hitEdge == -1)
+        {
+            break;
+        }
+
+        if (t < hitT)
+        {
+            color = Htexture(currentHalfedgeID, uv + dir * t, 0);
+            break;
+        }
+
+        uv = uv + dir * hitT;
+        t -= hitT;
+        if (hitEdge == 0)
+        {
+            uv = float2(-uv.y, uv.x);
+            dir = float2(-dir.y, dir.x);
+            currentHalfedgeID = ccm_HalfedgePrevID(currentHalfedgeID);
+
+            // numerical precision fix
+            uv.x = 0;
+        }
+        else if (hitEdge == 1)
+        {
+            uv = float2(uv.y, -uv.x);
+            dir = float2(dir.y, -dir.x);
+            currentHalfedgeID = ccm_HalfedgeNextID(currentHalfedgeID);
+
+            // numerical precision fix
+            uv.y = 0;
+        }
+        else
+        {
+            uv = 1 - uv;
+            dir = -dir;
+            currentHalfedgeID = ccm_HalfedgeTwinID(currentHalfedgeID);
+
+            // numerical precision fix
+            uv.x = 1 - uv.y;
+        }
+    }
+
+    return color;
+}
+
 struct appdata
 {
     float4 vertex : POSITION;
@@ -215,5 +288,28 @@ float4 frag(v2f vertexInput, uint primitiveIndex: SV_PrimitiveID, centroid float
 {
     float4 color = 0;
     color = Htexture(primitiveIndex, vBaryWeights.yz, 0);
+
+#if 0
+    float w = 0;
+    color = 0;
+    for (int i = 0; i < 8; ++i)
+    {
+        float dir_x = (i + 0.5) / 8.0 * 2 -1;
+        for (int j = 0; j < 8; ++j)
+        {
+            float dir_y = (j + 0.5) / 8.0 * 2 - 1;
+            for (int k = 0; k < 8; ++k)
+            {
+                float2 dir = float2(dir_x, dir_y);
+                float d = (k + 0.5) / 8.0 * 4.2;
+                float4 s = HtextureSpatialSample(primitiveIndex, vBaryWeights.yz, dir, d);
+                color += HtextureSpatialSample(primitiveIndex, vBaryWeights.yz, dir, d);
+                w += 1;
+            }
+        }
+    }
+    color /= w;
+#endif
+
     return float4(color.xyz, 1);
 }
